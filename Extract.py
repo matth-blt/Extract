@@ -27,13 +27,22 @@ def export():
     output_filename = os.path.normpath(output_filename)
 
     format = format_var.get()
+    dataset_mode = dataset_var.get()
+
+    # Base command
+    base_cmd = f'ffmpeg -hide_banner -i "{input_path_value}" -sws_flags spline+accurate_rnd+full_chroma_int'
+
+    if dataset_mode == 1:  # dataset checkbox ON → scene detection
+        vf_opts = '-vf "select=\'gt(scene,0.15)\',showinfo" -vsync vfr'
+    else:
+        vf_opts = '-map 0:v'
 
     if format == 'PNG':
-        ffmpeg_command = f'ffmpeg -hide_banner -i "{input_path_value}" -sws_flags spline+accurate_rnd+full_chroma_int -color_trc 2 -colorspace 2 -color_primaries 2 -map 0:v -c:v png -pix_fmt rgb24 -start_number 0 "{output_filename}/%08d.png"'
+        ffmpeg_command = f'{base_cmd} -color_trc 2 -colorspace 2 -color_primaries 2 {vf_opts} -c:v png -pix_fmt rgb24 -start_number 0 "{output_filename}/%08d.png"'
     elif format == 'TIFF':
-        ffmpeg_command = f'ffmpeg -hide_banner -i "{input_path_value}" -sws_flags spline+accurate_rnd+full_chroma_int -color_trc 1 -colorspace 1 -color_primaries 1 -map 0:v -c:v tiff -pix_fmt rgb24 -compression_algo deflate -start_number 0 -movflags frag_keyframe+empty_moov+delay_moov+use_metadata_tags+write_colr -bf 0 "{output_filename}/%08d.tiff"'
+        ffmpeg_command = f'{base_cmd} -color_trc 1 -colorspace 1 -color_primaries 1 {vf_opts} -c:v tiff -pix_fmt rgb24 -compression_algo deflate -start_number 0 -movflags frag_keyframe+empty_moov+delay_moov+use_metadata_tags+write_colr -bf 0 "{output_filename}/%08d.tiff"'
     elif format == 'JPEG':
-        ffmpeg_command = f'ffmpeg -hide_banner -i "{input_path_value}" -sws_flags spline+accurate_rnd+full_chroma_int -color_trc 2 -colorspace 2 -color_primaries 2 -map 0:v -c:v mjpeg -pix_fmt yuvj420p -q:v 1 -start_number 0 "{output_filename}/%08d.jpg"'
+        ffmpeg_command = f'{base_cmd} -color_trc 2 -colorspace 2 -color_primaries 2 {vf_opts} -c:v mjpeg -pix_fmt yuvj420p -q:v 1 -start_number 0 "{output_filename}/%08d.jpg"'
 
     def run_ffmpeg_command():
         subprocess.run(ffmpeg_command, shell=True)
@@ -43,7 +52,7 @@ def export():
 
 app = ctk.CTk()
 app.title("Extract 2.0.0")
-app.geometry("500x432")
+app.geometry("500x480")
 
 input_path = ctk.StringVar()
 output_dir = ctk.StringVar()
@@ -63,6 +72,11 @@ format_var = ctk.StringVar(value='PNG')
 ctk.CTkLabel(app, text="Format:").pack(pady=10)
 format_combobox = ctk.CTkOptionMenu(app, variable=format_var, values=['PNG', 'TIFF', 'JPEG'])
 format_combobox.pack(pady=5)
+
+# New checkbox for dataset mode
+dataset_var = ctk.IntVar(value=0)
+dataset_checkbox = ctk.CTkCheckBox(app, text="Dataset Mode (Scene Detection)", variable=dataset_var)
+dataset_checkbox.pack(pady=10)
 
 ctk.CTkButton(app, text="Extract", command=export).pack(pady=20)
 
