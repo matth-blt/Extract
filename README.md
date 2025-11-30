@@ -1,217 +1,103 @@
-# Extract
+# 🎬 Extract - Video Frame Extractor
 
-Lightweight GUI application (Python + CustomTkinter) to extract frames (images) from a video, with optional automatic scene change detection (*Dataset mode*).  
-Currently supports formats: **PNG**, **JPEG**, and (planned) **TIFF** via `ffmpeg`.
+[![Français](https://img.shields.io/badge/lang-Français-blue.svg)](README_FR.md)
 
----
+A lightweight GUI application to extract frames from videos with optional scene detection.
 
-## ✨ Features
+## 📋 Features
 
-- Select a video file (supported extensions filtered: `.mkv .mp4 .webm .mov`)
-- Choose / create an output directory
-- Frame export modes:
-  - Standard mode: extract all frames from the video stream (`-map 0:v`)
-  - Dataset mode (checkbox): scene change detection (`select='gt(scene,0.15)'`) to export only representative frames
-- Supported output formats:
-  - PNG (24‑bit RGB)
-  - JPEG (high quality `-q:v 1`)
-  - TIFF (command incomplete – see Improvements)
-- Zero‑padded sequential numbering: `%08d.ext`
-- Asynchronous `ffmpeg` execution (thread) so the UI stays responsive
+- ✅ **Frame Extraction** - Extract all frames from a video (PNG, TIFF, JPEG)
+- ✅ **Scene Detection** - Dataset mode with automatic scene change detection
+- ✅ **Real-time Progress** - Live progress bar with percentage and frame counter
+- ✅ **Integrated Logs** - Built-in console to monitor extraction process
+- ✅ **Dark/Light Theme** - Toggle between dark and light modes
+- ✅ **Modern UI** - Clean interface built with CustomTkinter
 
----
+## 🚀 Installation
 
-## 🖥 Technical Overview
+### For Users
+1. Download the latest release
+2. Install dependencies: `pip install customtkinter`
+3. Run `python Extract.py`
 
-The script builds a base `ffmpeg` command:
-```
-ffmpeg -hide_banner -i "INPUT" -sws_flags spline+accurate_rnd+full_chroma_int [OPTIONS] ...
-```
-Then appends either:
-- `-vf "select='gt(scene,0.15)',showinfo" -vsync vfr` (Dataset mode)
-- or `-map 0:v` (all frames)
+### Prerequisites
+- **Python 3.10+**
+- **FFmpeg** installed and available in PATH
+- **FFprobe** (included with FFmpeg)
 
----
+#### Installing FFmpeg
+- **Windows**: Download from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) and add `ffmpeg/bin` to PATH
+- **macOS**: `brew install ffmpeg`
+- **Linux**: `sudo apt install ffmpeg`
 
-## 📁 Repository Structure
+## 📦 Project Structure
 
 ```
-.
-└── Extract.py  # Main script (GUI + ffmpeg command construction)
+Extract/
+├── Extract.py
+├── README.md
+├── README_FR.md
+└── LICENSE
 ```
 
----
+## 🎨 Detailed Features
 
-## 🔧 Prerequisites
+### 1️⃣ Frame Extraction
+Extracts all frames from a video into individual images.
+- **Formats**: PNG (Lossless), TIFF (Archive), JPEG (Lightweight)
+- **Scaling**: High quality (`spline+accurate_rnd+full_chroma_int`)
+- **Numbering**: Zero-padded sequential (`00000001.png`, `00000002.png`, ...)
 
-1. Python 3.10+ (recommended)
-2. ffmpeg installed and available in PATH:
-   - Windows: https://www.gyan.dev/ffmpeg/builds/ then add `ffmpeg/bin` to PATH
-   - macOS: `brew install ffmpeg`
-   - Linux (Debian/Ubuntu): `sudo apt-get install ffmpeg`
-3. Python dependencies:
-   - `customtkinter` (modern UI)
-   - (Optional future: `tqdm` for progress bar, `pytest` for tests)
+### 2️⃣ Dataset Mode (Scene Detection)
+Automatically extracts only frames at scene changes - ideal for creating training datasets.
+- **Filter**: `select='gt(scene,0.15)'` detects significant visual changes
+- **Output**: Variable frame rate (`-vsync vfr`) to skip similar frames
 
----
+### 3️⃣ Real-time Progress Tracking
+- Uses `ffprobe` to get video duration
+- Parses FFmpeg output to display live progress percentage
+- Shows current frame being extracted
 
-## 📦 Installation
+### 4️⃣ Supported Formats
 
+| Format | Codec | Pixel Format | Use Case |
+|--------|-------|--------------|----------|
+| PNG | png | rgb24 | Lossless, editing |
+| TIFF | tiff (deflate) | rgb24 | Archival |
+| JPEG | mjpeg | yuvj420p | Lightweight, web |
+
+## 🖥️ Usage
+
+1. **Select Input** - Browse or paste path to video file (`.mkv`, `.mp4`, `.webm`, `.mov`, `.avi`, `.wmv`, `.flv`)
+2. **Select Output** - Choose destination folder for extracted frames
+3. **Choose Format** - Select PNG, TIFF, or JPEG
+4. **Enable Dataset Mode** (optional) - Check to extract only scene changes
+5. **Click Extract** - Monitor progress in the log console
+
+## 🛠️ Technical Details
+
+The application builds FFmpeg commands like:
 ```bash
-git clone https://github.com/matth-blt/Extract.git
-cd Extract
-python -m venv .venv
-# Linux / macOS
-source .venv/bin/activate
-# Windows PowerShell
-# .venv\Scripts\Activate.ps1
-
-pip install --upgrade pip
-pip install customtkinter
+ffmpeg -hide_banner -progress pipe:1 -i "input.mp4" \
+  -sws_flags spline+accurate_rnd+full_chroma_int \
+  -c:v png -pix_fmt rgb24 -start_number 0 \
+  "output/%08d.png"
 ```
 
-Verify `ffmpeg`:
+With Dataset Mode enabled:
 ```bash
-ffmpeg -version
+ffmpeg -hide_banner -progress pipe:1 -i "input.mp4" \
+  -sws_flags spline+accurate_rnd+full_chroma_int \
+  -vf "select='gt(scene,0.15)',showinfo" -vsync vfr \
+  -c:v png -pix_fmt rgb24 -start_number 0 \
+  "output/%08d.png"
 ```
 
----
+## 📝 License
 
-## ▶️ Usage
+This project is open source. See [LICENSE](LICENSE) for details.
 
-Launch the interface:
+## 🙏 Acknowledgements
 
-```bash
-python Extract.py
-```
-
-UI steps:
-1. Click “Browse...” (Input Path) and choose a video.
-2. Click “Browse...” (Output Path) and pick / create a folder.
-3. Select export format (PNG / JPEG / TIFF).
-4. (Optional) Enable “Dataset Mode (Scene Detection)” to export only scene change frames.
-5. Click “Extract”.
-
-Output example:
-```
-OUTPUT_DIR/
-├── 00000000.png (or .jpg / .tiff)
-├── 00000001.png
-└── ...
-```
-
----
-
-## 🧪 Example Generated `ffmpeg` Command (PNG + scene mode)
-
-```bash
-ffmpeg -hide_banner -i "C:\Videos\film.mp4" -sws_flags spline+accurate_rnd+full_chroma_int \
--vf "select='gt(scene,0.15)',showinfo" -vsync vfr \
--color_trc 2 -colorspace 2 -color_primaries 2 \
--c:v png -pix_fmt rgb24 -start_number 0 "C:\Output\%08d.png"
-```
-
----
-
-## ❗ Current Limitations
-
-- No progress bar (thread starts `ffmpeg` without capturing output)
-- No disk space validation
-- No cancellation (cannot terminate process via UI)
-- TIFF block is incomplete / truncated in current code (line 43):
-  - Needs completion / correction (e.g. remove `-movflags` if not using a container, or adjust codec)
-- No external configuration (scene threshold `0.15` hard‑coded)
-- No structured logging or unit tests
-
----
-
-## 🛠 Potential Improvements
-
-- Add progress parsing (parse `ffmpeg` stderr)
-- Make scene threshold configurable (`--scene-threshold`)
-- Additional formats: WebP, AVIF, HEIF
-- Time range extraction option
-- Drag & drop support
-- Executable packaging (PyInstaller / Briefcase)
-- Internationalization (EN/FR)
-- Frame hashing / deduplication
-
----
-
-## 🧹 Code Quality & Style
-
-Suggested (not implemented):
-```bash
-pip install ruff mypy
-ruff check .
-ruff format .
-mypy Extract.py
-```
-
----
-
-## 🔐 Security
-
-- No data collection
-- Validate paths (avoid overwriting critical data)
-- Avoid running on untrusted media without sandboxing
-
----
-
-## 🧾 License
-
-Specify a license (e.g. MIT). Example:
-
-```
-MIT License © 2025 matth-blt
-```
-
----
-
-## 🤝 Contributing
-
-Pull requests welcome:
-1. Fork
-2. Create a branch: `feat/add-tiff`
-3. Conventional commit: `feat: add proper tiff support`
-4. Open PR with description (ffmpeg command, tests)
-
----
-
-## ❓ Quick FAQ
-
-Q: No images exported?  
-A: Check output path, permissions, or whether the video has a video stream.
-
-Q: Dataset mode produces very few images?  
-A: Threshold `0.15` may be high – make it configurable.
-
-Q: Colors look off?  
-A: Inspect/remove color flags (`-color_trc`, etc.) for debugging.
-
----
-
-## 🗺 Suggested Roadmap
-
-- [ ] Fix / complete TIFF command
-- [ ] UI control for scene threshold
-- [ ] Show progress + ETA
-- [ ] Status bar / log panel
-- [ ] Internationalization
-- [ ] Cross‑platform executable
-
----
-
-## 🙏 Acknowledgments
-
-- `ffmpeg` (essential open source project)
-- `customtkinter` for modern UI
-
----
-
-If you want, I can also:
-- Propose a correct TIFF command
-- Add ffmpeg output parsing for progress
-- Prepare a packaging script
-
-Let me know and I’ll adapt. Happy extracting! 🎬
+- **FFmpeg** - The backbone of video processing
+- **CustomTkinter** - Modern Python UI framework
