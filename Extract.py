@@ -246,7 +246,7 @@ def main(page: ft.Page):
             state["input_path"] = path
             input_field.value = path
             input_field.update()
-            log(f"📥 File selected: {os.path.basename(path)}")
+            log(f"File selected: {os.path.basename(path)}")
             # Probe in background
             def probe():
                 info = get_video_info(path)
@@ -254,13 +254,13 @@ def main(page: ft.Page):
                 state["is_hdr"] = info["is_hdr"]
                 state["hdr_type"] = info["hdr_type"]
                 if info["duration"] > 0:
-                    log(f"⏱️  Duration: {info['duration']:.2f}s")
+                    log(f"Duration: {info['duration']:.2f}s")
                 if info["is_hdr"]:
-                    log(f"📺 {info['hdr_type']} detected — HDR Mode recommended")
+                    log(f"{info['hdr_type']} detected — HDR Mode recommended")
                     hdr_checkbox.value = True
                     hdr_checkbox.update()
                 else:
-                    log("📺 SDR video — standard extraction")
+                    log("SDR video — standard extraction")
                 update_hdr_badge(info)
             threading.Thread(target=probe, daemon=True).start()
 
@@ -269,7 +269,7 @@ def main(page: ft.Page):
             state["output_dir"] = e.path
             output_field.value = e.path
             output_field.update()
-            log(f"📤 Output folder: {e.path}")
+            log(f"Output folder: {e.path}")
 
     # Using tkinter for extremely stable native dialogs on Windows
     def pick_input(e):
@@ -306,7 +306,7 @@ def main(page: ft.Page):
             on_output_picked(fake_event)
 
     files_section = _card(
-        title="📁 Files",
+        title="Files",
         content=ft.Column([
             ft.Row([
                 input_field,
@@ -409,7 +409,7 @@ def main(page: ft.Page):
     hdr_checkbox.on_change = on_hdr_change
 
     settings_section = _card(
-        title="⚙️ Settings",
+        title="Settings",
         content=ft.Column([
             ft.Row([ft.Text("Format:", size=14), format_seg], spacing=16),
             ft.Divider(height=1, color=ft.Colors.with_opacity(0.1, ft.Colors.ON_SURFACE)),
@@ -428,7 +428,7 @@ def main(page: ft.Page):
     status_text = ft.Text("Waiting...", size=13, color="#888888")
 
     progress_section = _card(
-        title="📊 Progress",
+        title="Progress",
         content=ft.Column([
             ft.Row([progress_bar, progress_pct], spacing=12),
             status_text,
@@ -440,7 +440,7 @@ def main(page: ft.Page):
 
     logs_section = ft.Container(
         content=ft.Column([
-            ft.Text("📋 Logs", size=16, weight=ft.FontWeight.BOLD),
+            ft.Text("Logs", size=16, weight=ft.FontWeight.BOLD),
             ft.Container(
                 content=log_list,
                 expand=True,
@@ -472,7 +472,7 @@ def main(page: ft.Page):
 
     # ── Action Buttons ──────────────────────────────────────────────────────
     extract_btn = ft.FilledButton(
-        "🚀  Extract",
+        "Extract",
         icon=ft.Icons.PLAY_ARROW_ROUNDED,
         style=ft.ButtonStyle(
             bgcolor={"": "#6200EE"},
@@ -485,7 +485,7 @@ def main(page: ft.Page):
     actions_row = ft.Container(
         content=ft.Row([
             ft.OutlinedButton(
-                "🗑️  Clear Logs",
+                " Clear Logs",
                 icon=ft.Icons.DELETE_SWEEP_ROUNDED,
                 style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
                 on_click=clear_logs,
@@ -500,12 +500,12 @@ def main(page: ft.Page):
         state["is_extracting"] = extracting
         if extracting:
             extract_btn.disabled = True
-            extract_btn.text = "⏳  Extracting..."
+            extract_btn.text = "Extracting..."
             status_text.value = "Starting..."
             status_text.color = "#FFA726"
         else:
             extract_btn.disabled = False
-            extract_btn.text = "🚀  Extract"
+            extract_btn.text = " Extract"
             status_text.color = ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)
         extract_btn.update()
         status_text.update()
@@ -526,10 +526,10 @@ def main(page: ft.Page):
         inp = state["input_path"]
         out = state["output_dir"]
         if not inp or not out:
-            log("❌ Please select an input file and output folder.")
+            log("Please select an input file and output folder.")
             return
         if not os.path.isfile(inp):
-            log("❌ Input file does not exist.")
+            log("Input file does not exist.")
             return
 
         fmt = list(format_seg.selected)[0]
@@ -551,9 +551,9 @@ def main(page: ft.Page):
             tonemap, npl, threshold
         )
 
-        log(f"🎯 Format: {fmt} | HDR: {'ON (' + tonemap + ')' if hdr and hdr_active else 'OFF'} | Dataset: {'ON' if dataset else 'OFF'}")
-        log("🚀 Starting extraction...")
-        log(f"💻 CMD: {cmd}")
+        log(f"Format: {fmt} | HDR: {'ON (' + tonemap + ')' if hdr and hdr_active else 'OFF'} | Dataset: {'ON' if dataset else 'OFF'}")
+        log("Starting extraction...")
+        log(f"CMD: {cmd}")
 
         set_extracting(True)
         progress_bar.value = 0
@@ -609,20 +609,20 @@ def main(page: ft.Page):
             progress_pct.value = "100%"
             progress_bar.update()
             progress_pct.update()
-            status_text.value = "✅ Extraction complete!"
+            status_text.value = "Extraction complete!"
             status_text.color = "#4CAF50"
             status_text.update()
-            log("✅ Extraction completed successfully!")
+            log("Extraction completed successfully!")
             page.snack_bar = ft.SnackBar(
-                ft.Text("✅ Extraction complete!"), bgcolor="#4CAF50"
+                ft.Text("Extraction complete!"), bgcolor="#4CAF50"
             )
         else:
-            status_text.value = "❌ Extraction failed"
+            status_text.value = "Extraction failed"
             status_text.color = "#F44336"
             status_text.update()
-            log("❌ Extraction failed.")
+            log("Extraction failed.")
             page.snack_bar = ft.SnackBar(
-                ft.Text("❌ Extraction failed — check logs"), bgcolor="#F44336"
+                ft.Text("Extraction failed — check logs"), bgcolor="#F44336"
             )
         page.snack_bar.open = True
         page.update()
@@ -649,10 +649,10 @@ def main(page: ft.Page):
         ok = check_zscale_available()
         state["zscale_ok"] = ok
         if ok:
-            log("✅ zscale (libzimg) is available — HDR mode ready")
+            log("zscale (libzimg) is available — HDR mode ready")
         else:
-            log("⚠️  zscale not found in FFmpeg — HDR mode disabled")
-            log("   → Install FFmpeg from gyan.dev (Essentials or Full build)")
+            log("zscale not found in FFmpeg — HDR mode disabled")
+            log("→ Install FFmpeg from gyan.dev (Essentials or Full build)")
             zscale_warning.visible = hdr_checkbox.value
             zscale_warning.update()
 
