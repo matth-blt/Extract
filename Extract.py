@@ -1,16 +1,21 @@
-import flet as ft
-import tkinter as tk
-from tkinter import filedialog
 import os
+import ssl
+import shlex
+import shutil
 import subprocess
 import threading
 import re
 import json
+import flet as ft
 
+try:
+    import certifi
+    os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+    os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+except ImportError:
+    if not os.environ.get("SSL_CERT_FILE"):
+        ssl._create_default_https_context = ssl._create_unverified_context
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Constants
-# ─────────────────────────────────────────────────────────────────────────────
 APP_VERSION = "4.0.0"
 APP_TITLE = f"Extract {APP_VERSION}"
 
@@ -24,13 +29,18 @@ TONEMAP_OPTIONS = ["hable", "mobius", "reinhard", "clip"]
 SCENE_THRESHOLD_DEFAULT = 0.15
 NPL_DEFAULT = 100
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-# FFmpeg Logic (pure Python, no GUI dependency)
-# ─────────────────────────────────────────────────────────────────────────────
+_NO_WINDOW = (
+    {"creationflags": subprocess.CREATE_NO_WINDOW}
+    if hasattr(subprocess, "CREATE_NO_WINDOW") else {}
+)
 
 def get_video_info(input_path: str) -> dict:
-    """Returns duration and HDR metadata from ffprobe."""
+    """Probe a video with ffprobe and return its duration and HDR status.
+
+    Returns a dict with ``duration`` (seconds), ``is_hdr`` (bool) and
+    ``hdr_type`` (label). On any failure, falls back to SDR / zero duration.
+    """
+
     cmd = [
         "ffprobe", "-v", "quiet", "-print_format", "json",
         "-show_format", "-show_streams", "-select_streams", "v:0",
@@ -39,7 +49,7 @@ def get_video_info(input_path: str) -> dict:
     try:
         result = subprocess.run(
             cmd, capture_output=True, text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
+            timeout=30, **_NO_WINDOW
         )
         data = json.loads(result.stdout)
         stream = data.get("streams", [{}])[0]
@@ -47,48 +57,42 @@ def get_video_info(input_path: str) -> dict:
 
         duration = float(fmt.get("duration", 0))
         color_transfer = stream.get("color_transfer", "")
-        color_primaries = stream.get("color_primaries", "")
-
-        is_hdr = color_transfer in HDR_TRANSFERS
-        hdr_type = HDR_TRANSFERS.get(color_transfer, "SDR")
 
         return {
             "duration": duration,
-            "is_hdr": is_hdr,
-            "hdr_type": hdr_type,
-            "color_transfer": color_transfer,
-            "color_primaries": color_primaries,
+            "is_hdr": color_transfer in HDR_TRANSFERS,
+            "hdr_type": HDR_TRANSFERS.get(color_transfer, "SDR"),
         }
-    except Exception as e:
-        return {"duration": 0, "is_hdr": False, "hdr_type": "SDR",
-                "color_transfer": "", "color_primaries": "", "error": str(e)}
+    except Exception:
+        return {"duration": 0, "is_hdr": False, "hdr_type": "SDR"}
 
 
 def check_zscale_available() -> bool:
     """Checks whether zscale (libzimg) is available in the current FFmpeg build."""
+
     try:
         result = subprocess.run(
             ["ffmpeg", "-filters"],
             capture_output=True, text=True,
-            creationflags=subprocess.CREATE_NO_WINDOW
+            timeout=15, **_NO_WINDOW
         )
         return "zscale" in result.stdout
     except Exception:
         return False
 
 
-def build_vf_filter(hdr_mode: bool, hdr_active: bool, dataset_mode: bool,
-                    tonemap: str, npl: int, scene_threshold: float,
-                    output_format: str) -> str:
+def build_vf_filter(
+    hdr_mode: bool, hdr_active: bool, dataset_mode: bool,
+    tonemap: str, npl: int, scene_threshold: float,
+    output_format: str
+) -> str:
     """
     Builds the -vf filter string based on selected options.
     Returns an empty string when no video filter is needed.
     """
-    parts = []
 
-    # ── HDR tonemapping chain ──
+    parts = []
     if hdr_mode and hdr_active:
-        # Final pixel format depends on output
         final_fmt = "rgb24" if output_format in ("PNG", "TIFF") else "yuv420p"
         parts += [
             f"zscale=t=linear:npl={npl}",
@@ -99,7 +103,6 @@ def build_vf_filter(hdr_mode: bool, hdr_active: bool, dataset_mode: bool,
             f"format={final_fmt}",
         ]
 
-    # ── Scene detection ──
     if dataset_mode:
         parts.append(f"select='gt(scene,{scene_threshold})'")
         parts.append("showinfo")
@@ -107,38 +110,53 @@ def build_vf_filter(hdr_mode: bool, hdr_active: bool, dataset_mode: bool,
     return ",".join(parts)
 
 
-def build_ffmpeg_cmd(input_path: str, output_dir: str, output_format: str,
-                     hdr_mode: bool, hdr_active: bool, dataset_mode: bool,
-                     tonemap: str, npl: int, scene_threshold: float) -> str:
-    """Assembles the complete FFmpeg command string."""
+def build_ffmpeg_cmd(
+    input_path: str, output_dir: str, output_format: str,
+    hdr_mode: bool, hdr_active: bool, dataset_mode: bool,
+    tonemap: str, npl: int, scene_threshold: float
+) -> list[str]:
+    """Assembles the FFmpeg command as an argv list (safe for shell=False)."""
+
     safe_out = os.path.normpath(output_dir)
-    base = (
-        f'ffmpeg -hide_banner -progress pipe:1 '
-        f'-i "{input_path}" '
-        f'-sws_flags spline+accurate_rnd+full_chroma_int'
+    
+    cmd = [
+        "ffmpeg", "-hide_banner", "-progress", "pipe:1",
+        "-i", input_path,
+        "-sws_flags", "spline+accurate_rnd+full_chroma_int",
+    ]
+
+    vf = build_vf_filter(
+        hdr_mode, hdr_active, dataset_mode,
+        tonemap, npl, scene_threshold, output_format
     )
+    if vf:
+        cmd += ["-vf", vf]
+    else:
+        cmd += ["-map", "0:v"]
 
-    vf = build_vf_filter(hdr_mode, hdr_active, dataset_mode,
-                         tonemap, npl, scene_threshold, output_format)
-
-    vf_arg = f' -vf "{vf}"' if vf else " -map 0:v"
-    vsync_arg = " -vsync vfr" if dataset_mode else ""
+    if dataset_mode:
+        cmd += ["-vsync", "vfr"]
 
     if output_format == "PNG":
-        codec = f'-color_trc 2 -colorspace 2 -color_primaries 2 -c:v png -pix_fmt rgb24'
+        cmd += ["-color_trc", "2", "-colorspace", "2", "-color_primaries", "2",
+                "-c:v", "png", "-pix_fmt", "rgb24"]
         ext = "png"
     elif output_format == "TIFF":
-        codec = f'-color_trc 1 -colorspace 1 -color_primaries 1 -c:v tiff -pix_fmt rgb24 -compression_algo deflate'
+        cmd += ["-color_trc", "1", "-colorspace", "1", "-color_primaries", "1",
+                "-c:v", "tiff", "-pix_fmt", "rgb24", "-compression_algo", "deflate"]
         ext = "tiff"
     else:  # JPEG
-        codec = f'-color_trc 2 -colorspace 2 -color_primaries 2 -c:v mjpeg -pix_fmt yuvj420p -q:v 1'
+        cmd += ["-color_trc", "2", "-colorspace", "2", "-color_primaries", "2",
+                "-c:v", "mjpeg", "-pix_fmt", "yuvj420p", "-q:v", "1"]
         ext = "jpg"
 
-    return f'{base}{vf_arg}{vsync_arg} {codec} -start_number 0 "{safe_out}/%08d.{ext}"'
+    cmd += ["-start_number", "0", os.path.join(safe_out, f"%08d.{ext}")]
+    return cmd
 
 
 def parse_time(time_str: str) -> float:
     """Converts HH:MM:SS.ms to seconds."""
+    
     try:
         h, m, s = time_str.split(":")
         return float(h) * 3600 + float(m) * 60 + float(s)
@@ -146,11 +164,9 @@ def parse_time(time_str: str) -> float:
         return 0.0
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Flet UI
-# ─────────────────────────────────────────────────────────────────────────────
-
 def main(page: ft.Page):
+    """Build the Flet UI and wire up the extraction workflow."""
+
     page.title = APP_TITLE
     page.window.width = 680
     page.window.height = 820
@@ -161,7 +177,6 @@ def main(page: ft.Page):
     page.dark_theme = ft.Theme(color_scheme_seed="#BB86FC")
     page.padding = 0
 
-    # ── State ──────────────────────────────────────────────────────────────
     state = {
         "input_path": "",
         "output_dir": "",
@@ -172,8 +187,9 @@ def main(page: ft.Page):
         "zscale_ok": False,
     }
 
-    # ── Header ─────────────────────────────────────────────────────────────
     def toggle_theme(_):
+        """Switch between dark and light theme and flip the toggle icon."""
+
         if page.theme_mode == ft.ThemeMode.DARK:
             page.theme_mode = ft.ThemeMode.LIGHT
             theme_icon_btn.icon = ft.Icons.DARK_MODE
@@ -202,7 +218,6 @@ def main(page: ft.Page):
         padding=ft.Padding.symmetric(horizontal=24, vertical=16),
     )
 
-    # ── HDR Badge ──────────────────────────────────────────────────────────
     hdr_badge = ft.Container(
         content=ft.Row([
             ft.Icon(ft.Icons.HIGH_QUALITY_ROUNDED, size=14, color="#121212"),
@@ -215,6 +230,8 @@ def main(page: ft.Page):
     )
 
     def update_hdr_badge(info: dict):
+        """Show the HDR badge with the detected transfer label, or hide it."""
+
         if info["is_hdr"]:
             hdr_badge.content.controls[1].value = info["hdr_type"]
             hdr_badge.visible = True
@@ -222,7 +239,6 @@ def main(page: ft.Page):
             hdr_badge.visible = False
         hdr_badge.update()
 
-    # ── Files Section ───────────────────────────────────────────────────────
     input_field = ft.TextField(
         label="Input video",
         read_only=True,
@@ -240,70 +256,69 @@ def main(page: ft.Page):
         prefix_icon=ft.Icons.FOLDER_ROUNDED,
     )
 
-    def on_input_picked(e: ft.FilePickerResultEvent):
-        if e.files:
-            path = e.files[0].path
-            state["input_path"] = path
-            input_field.value = path
-            input_field.update()
-            log(f"File selected: {os.path.basename(path)}")
-            # Probe in background
-            def probe():
-                info = get_video_info(path)
-                state["video_duration"] = info["duration"]
-                state["is_hdr"] = info["is_hdr"]
-                state["hdr_type"] = info["hdr_type"]
-                if info["duration"] > 0:
-                    log(f"Duration: {info['duration']:.2f}s")
-                if info["is_hdr"]:
-                    log(f"{info['hdr_type']} detected — HDR Mode recommended")
-                    hdr_checkbox.value = True
-                    hdr_checkbox.update()
-                else:
-                    log("SDR video — standard extraction")
-                update_hdr_badge(info)
-            threading.Thread(target=probe, daemon=True).start()
+    def handle_input(path: str):
+        """Store the chosen input file and probe it for duration/HDR off-thread."""
 
-    def on_output_picked(e: ft.FilePickerResultEvent):
-        if e.path:
-            state["output_dir"] = e.path
-            output_field.value = e.path
-            output_field.update()
-            log(f"Output folder: {e.path}")
+        if not path:
+            return
+        
+        state["input_path"] = path
+        input_field.value = path
+        input_field.update()
+        log(f"File selected: {os.path.basename(path)}")
 
-    # Using tkinter for extremely stable native dialogs on Windows
-    def pick_input(e):
-        root = tk.Tk()
-        root.attributes('-topmost', True)
-        root.withdraw()
-        path = filedialog.askopenfilename(
-            title="Select video file",
-            filetypes=[('Video Files', '*.mkv *.mp4 *.webm *.mov *.avi *.wmv *.flv')]
+        def probe():
+            info = get_video_info(path)
+            state["video_duration"] = info["duration"]
+            state["is_hdr"] = info["is_hdr"]
+            state["hdr_type"] = info["hdr_type"]
+
+            if info["duration"] > 0:
+                log(f"Duration: {info['duration']:.2f}s")
+            if info["is_hdr"]:
+                log(f"{info['hdr_type']} detected — HDR Mode recommended")
+                hdr_checkbox.value = True
+                hdr_checkbox.update()
+            else:
+                log("SDR video — standard extraction")
+
+            update_hdr_badge(info)
+        threading.Thread(target=probe, daemon=True).start()
+
+    def handle_output(path: str):
+        """Store the chosen output directory."""
+
+        if not path:
+            return
+        
+        state["output_dir"] = path
+        output_field.value = path
+        output_field.update()
+        log(f"Output folder: {path}")
+
+    input_picker = ft.FilePicker()
+    output_picker = ft.FilePicker()
+    page.services.extend([input_picker, output_picker])
+
+    async def pick_input(e):
+        """Open the native file dialog and load the selected video."""
+
+        files = await input_picker.pick_files(
+            dialog_title="Select video file",
+            allow_multiple=False,
+            allowed_extensions=["mkv", "mp4", "webm", "mov", "avi", "wmv", "flv"],
         )
-        root.destroy()
-        if path:
-            # Manually trigger the result handler logic
-            class FakeResult: pass
-            fake_event = FakeResult()
-            class FakeFile: pass
-            fake_file = FakeFile()
-            fake_file.path = path
-            fake_event.files = [fake_file]
-            on_input_picked(fake_event)
 
-    def pick_output(e):
-        root = tk.Tk()
-        root.attributes('-topmost', True)
-        root.withdraw()
-        path = filedialog.askdirectory(
-            title="Select output folder"
+        if files:
+            handle_input(files[0].path)
+
+    async def pick_output(e):
+        """Open the native directory dialog and store the output folder."""
+
+        path = await output_picker.get_directory_path(
+            dialog_title="Select output folder"
         )
-        root.destroy()
-        if path:
-            class FakeResult: pass
-            fake_event = FakeResult()
-            fake_event.path = path
-            on_output_picked(fake_event)
+        handle_output(path)
 
     files_section = _card(
         title="Files",
@@ -328,7 +343,6 @@ def main(page: ft.Page):
         ], spacing=12),
     )
 
-    # ── Settings Section ────────────────────────────────────────────────────
     format_seg = ft.SegmentedButton(
         selected=["PNG"],
         segments=[
@@ -356,8 +370,11 @@ def main(page: ft.Page):
     ], visible=False, spacing=8)
 
     def on_dataset_change(e):
+        """Toggle the scene-threshold slider with the Dataset Mode checkbox."""
+
         scene_row.visible = dataset_checkbox.value
         scene_row.update()
+
     dataset_checkbox.on_change = on_dataset_change
 
     hdr_checkbox = ft.Checkbox(
@@ -398,14 +415,16 @@ def main(page: ft.Page):
     )
 
     def on_hdr_change(e):
+        """Reveal HDR tonemap options, warning if zscale is unavailable."""
+
         enabled = hdr_checkbox.value
         hdr_options_row.visible = enabled
         tonemap_dropdown.visible = enabled
         npl_field.visible = enabled
-        # Show warning if zscale not available
         zscale_warning.visible = enabled and not state["zscale_ok"]
         hdr_options_row.update()
         zscale_warning.update()
+
     hdr_checkbox.on_change = on_hdr_change
 
     settings_section = _card(
@@ -422,7 +441,6 @@ def main(page: ft.Page):
         ], spacing=10),
     )
 
-    # ── Progress Section ────────────────────────────────────────────────────
     progress_bar = ft.ProgressBar(value=0, expand=True, border_radius=8, height=10)
     progress_pct = ft.Text("0%", size=13, weight=ft.FontWeight.W_600)
     status_text = ft.Text("Waiting...", size=13, color="#888888")
@@ -435,7 +453,6 @@ def main(page: ft.Page):
         ], spacing=8),
     )
 
-    # ── Logs Section ────────────────────────────────────────────────────────
     log_list = ft.ListView(expand=True, spacing=2, auto_scroll=True)
 
     logs_section = ft.Container(
@@ -455,6 +472,8 @@ def main(page: ft.Page):
     )
 
     def log(message: str):
+        """Append a line to the log view, capping history at 500 entries."""
+
         log_list.controls.append(
             ft.Text(message, size=12, selectable=True,
                     font_family="Courier New")
@@ -467,18 +486,17 @@ def main(page: ft.Page):
             pass
 
     def clear_logs(_):
+        """Empty the log view."""
+
         log_list.controls.clear()
         log_list.update()
 
-    # ── Action Buttons ──────────────────────────────────────────────────────
     extract_btn = ft.FilledButton(
         "Extract",
         icon=ft.Icons.PLAY_ARROW_ROUNDED,
-        style=ft.ButtonStyle(
-            bgcolor={"": "#6200EE"},
-            color={"": ft.Colors.WHITE},
-            shape=ft.RoundedRectangleBorder(radius=10),
-        ),
+        bgcolor="#6200EE",
+        color=ft.Colors.WHITE,
+        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=10)),
         on_click=lambda _: start_extraction(),
     )
 
@@ -495,23 +513,29 @@ def main(page: ft.Page):
         padding=ft.Padding.symmetric(horizontal=20, vertical=12),
     )
 
-    # ── Extraction logic ────────────────────────────────────────────────────
     def set_extracting(extracting: bool):
+        """Toggle the busy state: disable the button and update its label."""
+
         state["is_extracting"] = extracting
+
         if extracting:
             extract_btn.disabled = True
-            extract_btn.text = "Extracting..."
+            extract_btn.content = "Extracting..."
             status_text.value = "Starting..."
             status_text.color = "#FFA726"
         else:
             extract_btn.disabled = False
-            extract_btn.text = " Extract"
+            extract_btn.content = "Extract"
             status_text.color = ft.Colors.with_opacity(0.6, ft.Colors.ON_SURFACE)
+
         extract_btn.update()
         status_text.update()
 
     def update_progress(current_time: float):
+        """Update the progress bar from the current ffmpeg timestamp."""
+
         dur = state["video_duration"]
+
         if dur > 0:
             pct = min(current_time / dur, 1.0)
             progress_bar.value = pct
@@ -520,11 +544,14 @@ def main(page: ft.Page):
             progress_pct.update()
 
     def start_extraction():
+        """Validate inputs, build the ffmpeg command and run it off-thread."""
+
         if state["is_extracting"]:
             return
 
         inp = state["input_path"]
         out = state["output_dir"]
+
         if not inp or not out:
             log("Please select an input file and output folder.")
             return
@@ -537,9 +564,10 @@ def main(page: ft.Page):
         hdr = hdr_checkbox.value and state["zscale_ok"]
         hdr_active = state["is_hdr"]
         tonemap = tonemap_dropdown.value
+
         try:
             npl = int(npl_field.value)
-        except ValueError:
+        except (ValueError, TypeError):
             npl = NPL_DEFAULT
         try:
             threshold = float(f"{scene_slider.value:.2f}")
@@ -553,7 +581,7 @@ def main(page: ft.Page):
 
         log(f"Format: {fmt} | HDR: {'ON (' + tonemap + ')' if hdr and hdr_active else 'OFF'} | Dataset: {'ON' if dataset else 'OFF'}")
         log("Starting extraction...")
-        log(f"CMD: {cmd}")
+        log(f"CMD: {shlex.join(cmd)}")
 
         set_extracting(True)
         progress_bar.value = 0
@@ -562,27 +590,38 @@ def main(page: ft.Page):
         progress_pct.update()
 
         def run():
+            """Stream ffmpeg output, throttling progress updates to the UI."""
+
             try:
                 process = subprocess.Popen(
-                    cmd, shell=True,
+                    cmd,
                     stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                     text=True, bufsize=1,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
+                    **_NO_WINDOW,
                 )
 
                 time_pattern = re.compile(r"out_time=(\d{2}:\d{2}:\d{2}\.\d+)")
                 frame_pattern = re.compile(r"frame=\s*(\d+)")
+                dur = state["video_duration"]
+                last_pct = -1
+                last_frame = 0
 
                 for line in process.stdout:
                     line = line.strip()
                     tm = time_pattern.search(line)
                     if tm:
                         t = parse_time(tm.group(1))
-                        page.run_task(async_update_progress, t)
+                        pct = int(min(t / dur, 1.0) * 100) if dur > 0 else 0
+                        if pct != last_pct:
+                            last_pct = pct
+                            page.run_task(async_update_progress, t)
                     fm = frame_pattern.search(line)
                     if fm:
-                        frame_n = fm.group(1)
-                        page.run_task(async_set_status, f"Frame {frame_n} extracted...")
+                        frame_n = int(fm.group(1))
+                        # Throttle: refresh status at most every 24 frames
+                        if frame_n - last_frame >= 24:
+                            last_frame = frame_n
+                            page.run_task(async_set_status, f"Frame {frame_n} extracted...")
 
                 process.wait()
                 success = process.returncode == 0
@@ -595,15 +634,22 @@ def main(page: ft.Page):
         threading.Thread(target=run, daemon=True).start()
 
     async def async_update_progress(t: float):
+        """UI-thread bridge to refresh the progress bar."""
+
         update_progress(t)
         page.update()
 
     async def async_set_status(text: str):
+        """UI-thread bridge to update the status line."""
+
         status_text.value = text
         status_text.update()
 
     async def async_finish(success: bool):
+        """UI-thread bridge to finalise the run with a snackbar and status."""
+
         set_extracting(False)
+
         if success:
             progress_bar.value = 1
             progress_pct.value = "100%"
@@ -613,21 +659,20 @@ def main(page: ft.Page):
             status_text.color = "#4CAF50"
             status_text.update()
             log("Extraction completed successfully!")
-            page.snack_bar = ft.SnackBar(
+            page.show_dialog(ft.SnackBar(
                 ft.Text("Extraction complete!"), bgcolor="#4CAF50"
-            )
+            ))
         else:
             status_text.value = "Extraction failed"
             status_text.color = "#F44336"
             status_text.update()
             log("Extraction failed.")
-            page.snack_bar = ft.SnackBar(
+            page.show_dialog(ft.SnackBar(
                 ft.Text("Extraction failed — check logs"), bgcolor="#F44336"
-            )
-        page.snack_bar.open = True
+            ))
+
         page.update()
 
-    # ── Layout ───────────────────────────────────────────────────────────────
     page.add(
         ft.Column([
             header,
@@ -644,27 +689,35 @@ def main(page: ft.Page):
         ], expand=True, spacing=0),
     )
 
-    # ── Startup checks ───────────────────────────────────────────────────────
     def startup_checks():
+        """Verify ffmpeg/ffprobe are installed and detect zscale support."""
+
+        missing = [b for b in ("ffmpeg", "ffprobe") if shutil.which(b) is None]
+
+        if missing:
+            log(f"⚠ {', '.join(missing)} not found in PATH — install FFmpeg first.")
+            log("→ macOS: brew install ffmpeg  |  Windows: gyan.dev build")
+            extract_btn.disabled = True
+            extract_btn.update()
+            return
+
         ok = check_zscale_available()
         state["zscale_ok"] = ok
+
         if ok:
             log("zscale (libzimg) is available — HDR mode ready")
         else:
             log("zscale not found in FFmpeg — HDR mode disabled")
-            log("→ Install FFmpeg from gyan.dev (Essentials or Full build)")
+            log("→ Install a full FFmpeg build (macOS: evermeet.cx | Windows: gyan.dev)")
             zscale_warning.visible = hdr_checkbox.value
             zscale_warning.update()
 
     threading.Thread(target=startup_checks, daemon=True).start()
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
 def _card(title: str, content: ft.Control) -> ft.Container:
     """Returns a Material-style card container."""
+
     return ft.Container(
         content=ft.Column([
             ft.Text(title, size=16, weight=ft.FontWeight.BOLD),
@@ -676,11 +729,6 @@ def _card(title: str, content: ft.Control) -> ft.Container:
         border=ft.Border.all(1, "#1fffffff"),
         bgcolor="#0affffff",
     )
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Entry point
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     ft.run(main)
