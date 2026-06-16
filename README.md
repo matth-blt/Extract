@@ -140,4 +140,4 @@ This project is open source. See [LICENSE](LICENSE) for details.
 
 - **FFmpeg** — The backbone of video processing
 - **Flet** — Modern Python UI framework (powered by Flutter)
-- **libzimg / zscale** — HDR color space conversion
+- **libzimg / zscale** — HDR color space conversion<!-- -->
