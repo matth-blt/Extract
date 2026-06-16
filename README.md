@@ -6,7 +6,7 @@ A cross-platform desktop application for extracting frames from video files, wit
 optional HDR-to-SDR tonemapping and scene-change detection. Built with
 [Flet](https://flet.dev) and powered by FFmpeg.
 
-<img width="682" height="840" alt="img" src="https://github.com/user-attachments/assets/d89e487d-325a-41b7-bb9a-0fc0707d2a52" />
+<img width="341" height="420" alt="img" src="https://github.com/user-attachments/assets/d89e487d-325a-41b7-bb9a-0fc0707d2a52" />
 
 ## Features
 
